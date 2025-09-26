@@ -43,6 +43,7 @@ public class WebSecurityConfig {
 
     @Bean
     public WebSecurityCustomizer webSecurityCustomizer() {
+        // Keep ignoring CORS preflight requests
         return (web) -> web.ignoring().requestMatchers(HttpMethod.OPTIONS, "/**");
     }
 
@@ -50,12 +51,29 @@ public class WebSecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
-                .exceptionHandling(exceptions -> exceptions
+
+                // --- allow unauthenticated access for demo endpoints and static demo page ---
+                .authorizeHttpRequests(auth -> auth
+                        // Public demo endpoints
+                        .requestMatchers("/demo/**", "/demo.html").permitAll()
+                        // (optional) health check & root/static assets if needed
+                        .requestMatchers("/", "/health", "/index.html", "/css/**", "/js/**", "/images/**").permitAll()
+                        // Login endpoint can stay public if your API expects it
+                        .requestMatchers(HttpMethod.POST, "/login").permitAll()
+                        // Everything else requires authentication
+                        .anyRequest().authenticated()
+                )
+
+                // --- standard exception & stateless session config ---
+                .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(jwtAuthenticationEntryPoint)
-                        .accessDeniedHandler(jwtAccessDeniedHandler))
-                .sessionManagement( session -> session
-                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                        .accessDeniedHandler(jwtAccessDeniedHandler)
+                )
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                // --- apply JWT filter chain ---
                 .apply(securityConfigurerAdapter());
+
         return http.build();
     }
 
@@ -63,4 +81,3 @@ public class WebSecurityConfig {
         return new JWTCustomDSL(tokenProvider);
     }
 }
-

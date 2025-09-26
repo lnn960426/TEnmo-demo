@@ -1,4 +1,4 @@
-BEGIN TRANSACTION;
+
 
 DROP TABLE IF EXISTS transfer, account, tenmo_user, transfer_type, transfer_status;
 DROP SEQUENCE IF EXISTS seq_user_id, seq_account_id, seq_transfer_id;
@@ -71,4 +71,4 @@ INSERT INTO transfer_status (transfer_status_desc) VALUES ('Rejected');
 INSERT INTO transfer_type (transfer_type_desc) VALUES ('Request');
 INSERT INTO transfer_type (transfer_type_desc) VALUES ('Send');
 
-COMMIT;
+
