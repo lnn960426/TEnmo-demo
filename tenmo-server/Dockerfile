@@ -1,5 +1,5 @@
 # ---- Build stage: compile with Maven ----
-FROM maven:3.9.7-eclipse-temurin-17 AS build
+FROM maven:3.9.7-eclipse-temurin-21 AS build
 WORKDIR /app
 # copy only pom first to leverage Docker layer cache
 COPY pom.xml .
@@ -11,7 +11,7 @@ COPY src ./src
 RUN mvn -q -DskipTests package
 
 # ---- Run stage: lightweight JRE image ----
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:21-jre
 WORKDIR /app
 # Render passes PORT; Spring picks it via server.port=${PORT:8080}
 ENV PORT=8080
