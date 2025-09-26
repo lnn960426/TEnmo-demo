@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>TEnmo Web Demo</title>
+<style>
+    body{font-family:ui-sans-serif,-apple-system,Arial;margin:24px;max-width:840px}
+    h1{margin:0 0 12px}
+    .row{display:flex;gap:8px;margin:10px 0}
+    input,button{padding:10px;border-radius:8px;border:1px solid #ddd}
+    input{flex:1}
+    button{cursor:pointer}
+    pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:auto}
+    .muted{color:#64748b}
+</style>
+<h1>TEnmo — Online Demo</h1>
+<p class="muted">Demo accounts: <code>demo1 / demo1</code> and <code>demo2 / demo2</code></p>
+
+<section>
+    <h3>1) Login</h3>
+    <div class="row">
+        <input id="username" placeholder="username" value="demo1">
+        <input id="password" placeholder="password" type="password" value="demo1">
+        <button id="btnLogin">Login</button>
+    </div>
+    <pre id="loginOut">—</pre>
+</section>
+
+<section>
+    <h3>2) Get Balance</h3>
+    <button id="btnBalance">Get Balance</button>
+    <pre id="balanceOut">—</pre>
+</section>
+
+<section>
+    <h3>3) Send Money</h3>
+    <div class="row">
+        <input id="toUser" placeholder="recipient username (e.g. demo2)" value="demo2">
+        <input id="amount" placeholder="amount" value="10.00">
+        <button id="btnSend">Send</button>
+    </div>
+    <pre id="sendOut">—</pre>
+</section>
+
+<script>
+    let token = "";
+
+    async function api(path, opts={}) {
+      opts.headers = Object.assign(
+        {'Content-Type':'application/json'},
+        opts.headers || {},
+        token ? {'Authorization': 'Bearer ' + token} : {}
+      );
+      const res = await fetch(path, opts);
+      const text = await res.text();
+      try { return JSON.parse(text); } catch { return text; }
+    }
+
+    document.getElementById('btnLogin').onclick = async () => {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      document.getElementById('loginOut').textContent = 'Logging in...';
+      const data = await api('/demo/login', {method:'POST', body: JSON.stringify({username,password})});
+      if (data && data.token) { token = data.token; }
+      document.getElementById('loginOut').textContent = JSON.stringify(data, null, 2);
+    };
+
+    document.getElementById('btnBalance').onclick = async () => {
+      document.getElementById('balanceOut').textContent = 'Fetching...';
+      const data = await api('/demo/balance');
+      document.getElementById('balanceOut').textContent = JSON.stringify(data, null, 2);
+    };
+
+    document.getElementById('btnSend').onclick = async () => {
+      const toUser = document.getElementById('toUser').value.trim();
+      const amount = document.getElementById('amount').value.trim();
+      document.getElementById('sendOut').textContent = 'Sending...';
+      const data = await api('/demo/send', {method:'POST', body: JSON.stringify({toUser, amount})});
+      document.getElementById('sendOut').textContent = JSON.stringify(data, null, 2);
+    };
+</script>
