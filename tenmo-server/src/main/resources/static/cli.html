@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>TEnmo Web CLI</title>
+    <style>
+        :root { color-scheme: dark; }
+        body { margin: 0; background:#0b0f14; color:#d1d5db; font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+        .wrap { max-width: 980px; margin: 24px auto; padding: 16px; }
+        #term { white-space: pre-wrap; background:#0e131a; border:1px solid #1f2937; border-radius:12px; padding:16px; min-height: 60vh; }
+        #prompt { display:flex; gap:8px; align-items:center; margin-top:12px; }
+        #ps { color:#60a5fa; }
+        #cmd { flex:1; background:#0e131a; color:#e5e7eb; border:1px solid #334155; border-radius:10px; padding:10px 12px; outline:none; }
+        #cmd::placeholder { color:#64748b; }
+        .hint { color:#94a3b8; margin-top:8px; }
+        a { color:#93c5fd; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div id="term"></div>
+    <div id="prompt">
+        <span id="ps">$</span>
+        <input id="cmd" placeholder="type a command… (try: help)" autofocus />
+    </div>
+    <div class="hint">
+        GUI version: <a href="/demo.html">/demo.html</a> · Health: <a href="/demo/health">/demo/health</a>
+    </div>
+</div>
+<script>
+    const term = document.getElementById('term');
+    const input = document.getElementById('cmd');
+    const PS = document.getElementById('ps');
+
+    const S = { token: localStorage.getItem('TENMO_TOKEN')||null, user: localStorage.getItem('TENMO_USER')||null };
+    updatePS(); banner();
+
+    function println(s=''){ term.textContent += s + '\n'; term.scrollTop = term.scrollHeight; }
+    function banner(){
+      println('TEnmo Web CLI  ▸ type "help" for commands');
+      if(S.token) println(`(session restored for ${S.user})`);
+      println('');
+    }
+    function updatePS(){ PS.textContent = S.user ? `${S.user}@tenmo$` : '$'; }
+    function setSession(token, user){
+      S.token = token||null; S.user = user||null;
+      if(token){ localStorage.setItem('TENMO_TOKEN', token); localStorage.setItem('TENMO_USER', user||''); }
+      else{ localStorage.removeItem('TENMO_TOKEN'); localStorage.removeItem('TENMO_USER'); }
+      updatePS();
+    }
+    async function api(path, method='GET', body){
+      const h = { 'Content-Type':'application/json' };
+      if(S.token) h.Authorization = `Bearer ${S.token}`;
+      const r = await fetch(path, { method, headers:h, body: body?JSON.stringify(body):undefined });
+      const t = await r.text(); let b=null; try{ b = t?JSON.parse(t):null; }catch{ b=t; }
+      return { ok: r.ok, status:r.status, body:b };
+    }
+
+    async function handle(lineRaw){
+      const line = lineRaw.trim(); if(!line) return;
+      println(`${PS.textContent} ${line}`);
+      const [cmd, ...args] = line.split(/\s+/);
+      try{
+        switch(cmd.toLowerCase()){
+          case 'help':
+            println(`Commands:
+      register <user> <pass>         Create user
+      login <user> <pass>            Authenticate
+      users                          List users (excluding self)
+      balance                        Show current balance
+      history                        List transfers
+      view <id>                      Show transfer detail
+      pending                        List pending requests
+      approve <id>                   Approve request
+      reject <id>                    Reject request
+      send <toUserId> <amount>       Send money
+      request <toUserId> <amount>    Request money
+      status                         Show session
+      logout                         Clear token
+      clear                          Clear screen`);
+            break;
+
+          case 'register': {
+            if(args.length<2){ println('Usage: register <user> <pass>'); break; }
+            const [u,p]=args;
+            const {ok,status,body}=await api('/demo/register','POST',{username:u,password:p});
+            println(ok?`Registered: ${u}`:`Error (${status}): ${JSON.stringify(body)}`);
+            break;
+          }
+
+          case 'login': {
+            if(args.length<2){ println('Usage: login <user> <pass>'); break; }
+            const [u,p]=args;
+            const {ok,status,body}=await api('/demo/login','POST',{username:u,password:p});
+            if(!ok){ println(`Login failed (${status}): ${JSON.stringify(body)}`); break; }
+            const token = body?.token || body?.id_token || body?.jwt;
+            if(!token){ println('Server did not return token.'); break; }
+            setSession(token,u); println('Login success.'); break;
+          }
+
+          case 'users': {
+            const {ok,status,body}=await api('/demo/users');
+            if(!ok){ println(`Error (${status}): ${JSON.stringify(body)}`); break; }
+            println('ID   USERNAME'); println('----------------');
+            (body||[]).forEach(row=>println(String(row.id).padEnd(4,' ') + ' ' + row.username));
+            break;
+          }
+
+          case 'balance': {
+            const {ok,status,body}=await api('/demo/balance');
+            println(ok?`Your current balance is: $${body.balance}`:`Error (${status}): ${JSON.stringify(body)}`);
+            break;
+          }
+
+          case 'history': {
+            const {ok,status,body}=await api('/demo/transfers');
+            if(!ok){ println(`Error (${status}): ${JSON.stringify(body)}`); break; }
+            println('ID     From -> To            Amount'); println('------------------------------------');
+            (body||[]).forEach(t=>println(
+              String(t.transferId).padEnd(6,' ') + ' ' +
+              `${t.fromUsername} -> ${t.toUsername}`.padEnd(20,' ') + ' ' +
+              `$${t.transferAmount}`));
+            break;
+          }
+
+          case 'view': {
+            if(args.length<1){ println('Usage: view <id>'); break; }
+            const id = args[0];
+            const {ok,status,body}=await api(`/demo/transfers/${id}`);
+            if(!ok){ println(`Error (${status}): ${JSON.stringify(body)}`); break; }
+            println(`ID: ${body.transferId}
+    From: ${body.fromUsername}
+    To: ${body.toUsername}
+    Type: ${body.transferTypeId}
+    Status: ${body.transferStatusId}
+    Amount: $${body.transferAmount}`);
+            break;
+          }
+
+          case 'pending': {
+            const {ok,status,body}=await api('/demo/transfers/pending');
+            if(!ok){ println(`Error (${status}): ${JSON.stringify(body)}`); break; }
+            println('PendingID   ToUser       Amount'); println('-------------------------------');
+            (body||[]).forEach(t=>println(String(t.transferId).padEnd(11,' ') + ' ' +
+                String(t.toUsername).padEnd(12,' ') + ` $${t.transferAmount}`));
+            break;
+          }
+
+          case 'approve':
+          case 'reject': {
+            if(args.length<1){ println(`Usage: ${cmd} <id>`); break; }
+            const id=args[0];
+            const path = cmd==='approve' ? `/demo/transfers/${id}/approve` : `/demo/transfers/${id}/reject`;
+            const {ok,status,body}=await api(path,'POST');
+            println(ok?`${cmd} ok (#${id})`:`Error (${status}): ${JSON.stringify(body)}`);
+            break;
+          }
+
+          case 'send':
+          case 'request': {
+            if(args.length<2){ println(`Usage: ${cmd} <toUserId> <amount>`); break; }
+            const toUserId = Number(args[0]); const amount=args[1];
+            const {ok,status,body}=await api(`/demo/${cmd}`,'POST',{toUserId,amount});
+            println(ok?`${cmd} ok $${amount} -> ${toUserId}`:`Error (${status}): ${JSON.stringify(body)}`);
+            break;
+          }
+
+          case 'status':
+            println(`user: ${S.user||'(not logged in)'}\ntoken: ${S.token?S.token.slice(0,20)+'…':'(none)'}`);
+            break;
+
+          case 'logout': setSession(null,null); println('Logged out.'); break;
+          case 'clear': term.textContent=''; break;
+
+          default: println(`Unknown command: ${cmd}. Type "help".`);
+        }
+      }catch(e){ println(`Error: ${e?.message||e}`); }
+    }
+
+    input.addEventListener('keydown', e => {
+      if(e.key==='Enter'){ const v=input.value; input.value=''; handle(v); }
+    });
+</script>
+</body>
+</html>

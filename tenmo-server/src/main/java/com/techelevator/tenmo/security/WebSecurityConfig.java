@@ -64,7 +64,7 @@ public class WebSecurityConfig {
                 // --- allow unauthenticated access for demo endpoints and static demo page ---
                 .authorizeHttpRequests(auth -> auth
                         // Public demo endpoints
-                        .requestMatchers("/demo/**", "/demo.html").permitAll()
+                        .requestMatchers("/demo/**", "/demo.html", "/cli.html").permitAll()
                         // (optional) health check & root/static assets if needed
                         .requestMatchers("/", "/health", "/index.html", "/css/**", "/js/**", "/images/**").permitAll()
                         // Login endpoint can stay public if your API expects it
