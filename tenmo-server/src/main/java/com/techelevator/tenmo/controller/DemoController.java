@@ -50,11 +50,22 @@ public class DemoController {
     // ---- 1) login: username/password -> JWT ----
     @PostMapping("/login")
     public ResponseEntity<LoginResponseDto> login(@RequestBody LoginDto loginDto) {
+        // Authenticate
         Authentication auth = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(loginDto.getUsername(), loginDto.getPassword())
         );
+
+        // Create JWT
         String token = tokenProvider.createToken(auth, false);
-        return ResponseEntity.ok(new LoginResponseDto(token));
+
+        // Load user and sanitize password field before returning
+        User user = userDao.getUserByUsername(loginDto.getUsername());
+        if (user != null) {
+            user.setPassword(null); // do not leak password hash
+        }
+
+        // LoginResponseDto(String token, User user)
+        return ResponseEntity.ok(new LoginResponseDto(token, user));
     }
 
     // ---- 2) balance: read from JWT subject ----
