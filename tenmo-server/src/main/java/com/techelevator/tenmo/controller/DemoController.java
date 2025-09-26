@@ -1,18 +1,3 @@
-package com.techelevator.tenmo.demo;
-
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import java.math.BigDecimal;
-import java.util.Map;
-
-/**
- * This is a thin demo wrapper:
- * - /demo/login -> call your existing auth to get a JWT
- * - /demo/balance -> read current user from JWT and return balance
- * - /demo/send -> transfer from current user to a target username
- *
- * Replace the TODOs with your real services (Auth/Account/Transfer).
- */
 package com.techelevator.tenmo.controller;
 
 import com.techelevator.tenmo.dao.AccountDao;
@@ -56,23 +41,23 @@ public class DemoController {
         this.transferDao = transferDao;
     }
 
-    // ---- Health for quick check ----
+    // ---- health check for Render ----
     @GetMapping("/health")
-    public String health() { return "ok"; }
+    public String health() {
+        return "ok";
+    }
 
-    // ---- 1) Login: exchange username/password for JWT ----
+    // ---- 1) login: username/password -> JWT ----
     @PostMapping("/login")
     public ResponseEntity<LoginResponseDto> login(@RequestBody LoginDto loginDto) {
-        // Authenticate using Spring Security
         Authentication auth = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(loginDto.getUsername(), loginDto.getPassword())
         );
-        // Create JWT (no rememberMe in demo)
         String token = tokenProvider.createToken(auth, false);
         return ResponseEntity.ok(new LoginResponseDto(token));
     }
 
-    // ---- 2) Balance: current user's balance from JWT ----
+    // ---- 2) balance: read from JWT subject ----
     @GetMapping("/balance")
     public ResponseEntity<?> balance(@RequestHeader(value = "Authorization", required = false) String authz) {
         Integer userId = resolveUserIdFromAuthHeader(authz);
@@ -83,7 +68,7 @@ public class DemoController {
         return ResponseEntity.ok(Map.of("userId", userId, "balance", balance));
     }
 
-    // ---- 3) Send: transfer money to target username ----
+    // ---- 3) send: current user -> toUsername ----
     @PostMapping("/send")
     public ResponseEntity<?> send(@RequestHeader(value = "Authorization", required = false) String authz,
                                   @RequestBody Map<String, String> body) {
@@ -92,19 +77,15 @@ public class DemoController {
             return ResponseEntity.status(401).body(Map.of("error", "Missing or invalid token"));
         }
 
-        String toUsername = (body.getOrDefault("toUser", "")).trim();
-        String amtStr     = (body.getOrDefault("amount", "0")).trim();
-
+        String toUsername = body.getOrDefault("toUser", "").trim();
+        String amtStr = body.getOrDefault("amount", "0").trim();
         if (!StringUtils.hasText(toUsername)) {
             return ResponseEntity.badRequest().body(Map.of("error", "toUser is required"));
         }
 
         BigDecimal amount;
-        try {
-            amount = new BigDecimal(amtStr);
-        } catch (Exception e) {
-            return ResponseEntity.badRequest().body(Map.of("error", "amount is invalid"));
-        }
+        try { amount = new BigDecimal(amtStr); }
+        catch (Exception e) { return ResponseEntity.badRequest().body(Map.of("error", "amount is invalid")); }
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             return ResponseEntity.badRequest().body(Map.of("error", "amount must be > 0"));
         }
@@ -117,16 +98,13 @@ public class DemoController {
             return ResponseEntity.badRequest().body(Map.of("error", "cannot send to yourself"));
         }
 
-        // Your TransferDao handles balance checks and persistence
         boolean ok = transferDao.createSendTransfer(fromUserId, toUser.getId(), amount);
         if (!ok) {
             return ResponseEntity.badRequest().body(Map.of("error", "transfer failed"));
         }
 
-        // Optionally return fresh balances
         BigDecimal fromBal = accountDao.getBalanceByUserId(fromUserId);
         BigDecimal toBal   = accountDao.getBalanceByUserId(toUser.getId());
-
         return ResponseEntity.ok(Map.of(
                 "status", "ok",
                 "fromUserId", fromUserId,
@@ -137,17 +115,11 @@ public class DemoController {
         ));
     }
 
-    // ---- Helpers ----
-
-    /** Resolve userId from Authorization: Bearer <jwt>. */
+    /** Extract userId from Authorization: Bearer <jwt>. */
     private Integer resolveUserIdFromAuthHeader(String authz) {
-        if (!StringUtils.hasText(authz) || !authz.startsWith("Bearer ")) {
-            return null;
-        }
+        if (!StringUtils.hasText(authz) || !authz.startsWith("Bearer ")) return null;
         String token = authz.substring(7);
-        if (!tokenProvider.validateToken(token)) {
-            return null;
-        }
+        if (!tokenProvider.validateToken(token)) return null;
         Authentication auth = tokenProvider.getAuthentication(token);
         String username = auth.getName();
         User user = userDao.getUserByUsername(username);
