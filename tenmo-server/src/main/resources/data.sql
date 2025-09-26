@@ -2,10 +2,10 @@
 INSERT INTO transfer_status (transfer_status_desc) VALUES ('Pending'),('Approved'),('Rejected');
 INSERT INTO transfer_type (transfer_type_desc) VALUES ('Request'),('Send');
 
--- Demo users (replace with real BCrypt hashes)
+-- Demo users (real BCrypt hashes)
 INSERT INTO tenmo_user (username, password_hash, role) VALUES
-  ('demo1', '{BCryptHash_demo1}', 'USER'),
-  ('demo2', '{BCryptHash_demo2}', 'USER');
+  ('demo1', '$2b$10$1/hEwzyiv1GCgGT2el9B8OTH03fHipA7f.iNuUyMWhw1YH4eynDfi', 'USER'),
+  ('demo2', '$2b$10$BLMHR3BYbp1w/9md6UKL3.cOOcEd555x58fqxgCsd6dEx7naCHAUC', 'USER');
 
 -- Accounts for demo users
 INSERT INTO account (user_id, balance)
