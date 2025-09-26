@@ -5,6 +5,8 @@ import com.techelevator.tenmo.dao.TransferDao;
 import com.techelevator.tenmo.dao.UserDao;
 import com.techelevator.tenmo.model.LoginDto;
 import com.techelevator.tenmo.model.LoginResponseDto;
+import com.techelevator.tenmo.model.RegisterUserDto;
+import com.techelevator.tenmo.model.Transfer;
 import com.techelevator.tenmo.model.User;
 import com.techelevator.tenmo.security.jwt.TokenProvider;
 
@@ -16,298 +18,185 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
-import java.util.Map;
+import java.util.*;
 
-package com.techelevator.tenmo;
+/**
+ * Minimal endpoints to mirror your CLI flow.
+ */
+@RestController
+@RequestMapping("/demo")
+@CrossOrigin(origins = "*")
+public class DemoController {
 
-import com.techelevator.tenmo.model.*;
-import com.techelevator.tenmo.services.AuthenticationService;
-import com.techelevator.tenmo.services.ConsoleService;
-import com.techelevator.tenmo.services.TransferServices;
+    private final AuthenticationManager authenticationManager;
+    private final TokenProvider tokenProvider;
+    private final UserDao userDao;
+    private final AccountDao accountDao;
+    private final TransferDao transferDao;
 
-import org.springframework.http.converter.json.GsonBuilderUtils;
-
-import java.math.BigDecimal;
-import java.util.HashMap;
-import java.util.Map;
-
-public class App {
-
-    private static final String API_BASE_URL = "http://localhost:8080/";
-
-    private final ConsoleService consoleService = new ConsoleService();
-    private final AuthenticationService authenticationService = new AuthenticationService(API_BASE_URL);
-
-    private AuthenticatedUser currentUser;
-
-    private final TransferServices transferServices = new TransferServices(API_BASE_URL);
-
-    private String statusDescription(int statusId){
-        switch(statusId){
-            case 1: return "Pending";
-            case 2: return "Approve";
-            case 3: return "Rejected";
-        }
-        return null;
+    public DemoController(AuthenticationManager authenticationManager,
+                          TokenProvider tokenProvider,
+                          UserDao userDao,
+                          AccountDao accountDao,
+                          TransferDao transferDao) {
+        this.authenticationManager = authenticationManager;
+        this.tokenProvider = tokenProvider;
+        this.userDao = userDao;
+        this.accountDao = accountDao;
+        this.transferDao = transferDao;
     }
 
-    private String typeDescription(int typeId){
-        switch(typeId){
-            case 1: return "Request";
-            case 2: return "Send";
-            case 3: return "Unknow";
-        }
-        return null;
-
+    // ---- health ----
+    @GetMapping("/health")
+    public String health() {
+        return "ok";
     }
 
-
-    ;
-
-    public static void main(String[] args) {
-        App app = new App();
-        app.run();
+    // ---- auth ----
+    @PostMapping("/register")
+    public ResponseEntity<?> register(@RequestBody RegisterUserDto dto) {
+        if (!StringUtils.hasText(dto.getUsername()) || !StringUtils.hasText(dto.getPassword())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "username and password are required"));
+        }
+        User created = userDao.createUser(dto);
+        if (created != null) created.setPassword(null); // never return password hash
+        return ResponseEntity.ok(Map.of("status", "registered", "user", created));
     }
 
-    private void run() {
-        consoleService.printGreeting();
-        loginMenu();
-        if (currentUser != null) {
-            mainMenu();
-        }
+    @PostMapping("/login")
+    public ResponseEntity<LoginResponseDto> login(@RequestBody LoginDto loginDto) {
+        Authentication auth = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(loginDto.getUsername(), loginDto.getPassword()));
+        String token = tokenProvider.createToken(auth, false);
+        User user = userDao.getUserByUsername(loginDto.getUsername());
+        if (user != null) user.setPassword(null);
+        return ResponseEntity.ok(new LoginResponseDto(token, user));
     }
 
-    private void loginMenu() {
-        int menuSelection = -1;
-        while (menuSelection != 0 && currentUser == null) {
-            consoleService.printLoginMenu();
-            menuSelection = consoleService.promptForMenuSelection("Please choose an option: ");
-            if (menuSelection == 1) {
-                handleRegister();
-            } else if (menuSelection == 2) {
-                handleLogin();
-            } else if (menuSelection != 0) {
-                System.out.println("Invalid Selection");
-                consoleService.pause();
-            }
-        }
+    // ---- helpers ----
+    /** Extract userId from Authorization: Bearer <jwt>. */
+    private Integer currentUserId(String authz) {
+        if (!StringUtils.hasText(authz) || !authz.startsWith("Bearer ")) return null;
+        String token = authz.substring(7);
+        if (!tokenProvider.validateToken(token)) return null;
+        Authentication auth = tokenProvider.getAuthentication(token);
+        User u = userDao.getUserByUsername(auth.getName());
+        return (u != null) ? u.getId() : null;
     }
 
-    private void handleRegister() {
-        System.out.println("Please register a new user account");
-        UserCredentials credentials = consoleService.promptForCredentials();
-        if (authenticationService.register(credentials)) {
-            System.out.println("Registration successful. You can now login.");
-        } else {
-            consoleService.printErrorMessage();
+    // ---- users ----
+    @GetMapping("/users")
+    public ResponseEntity<?> users(@RequestHeader(value = "Authorization", required = false) String authz) {
+        Integer me = currentUserId(authz);
+        if (me == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        List<User> all = userDao.getUsers();
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (User u : all) {
+            if (u.getId() == me) continue;
+            list.add(Map.of("id", u.getId(), "username", u.getUsername()));
         }
+        return ResponseEntity.ok(list);
     }
 
-    private void handleLogin() {
-        UserCredentials credentials = consoleService.promptForCredentials();
-        currentUser = authenticationService.login(credentials);
-        if (currentUser == null) {
-            consoleService.printErrorMessage();
-        }
+    // ---- balance ----
+    @GetMapping("/balance")
+    public ResponseEntity<?> balance(@RequestHeader(value = "Authorization", required = false) String authz) {
+        Integer userId = currentUserId(authz);
+        if (userId == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        BigDecimal balance = accountDao.getBalanceByUserId(userId);
+        return ResponseEntity.ok(Map.of("userId", userId, "balance", balance));
     }
 
-    private void mainMenu() {
-        int menuSelection = -1;
-        while (menuSelection != 0) {
-            consoleService.printMainMenu();
-            menuSelection = consoleService.promptForMenuSelection("Please choose an option: ");
-            if (menuSelection == 1) {
-                viewCurrentBalance();
-            } else if (menuSelection == 2) {
-                viewTransferHistory();
-            } else if (menuSelection == 3) {
-                viewPendingRequests();
-            } else if (menuSelection == 4) {
-                sendBucks();
-            } else if (menuSelection == 5) {
-                requestBucks();
-            } else if (menuSelection == 0) {
-                continue;
-            } else {
-                System.out.println("Invalid Selection");
-            }
-            consoleService.pause();
-        }
+    // ---- transfers: list/history ----
+    @GetMapping("/transfers")
+    public ResponseEntity<?> history(@RequestHeader(value = "Authorization", required = false) String authz) {
+        Integer userId = currentUserId(authz);
+        if (userId == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        List<Transfer> list = transferDao.getTransferbyUserId(userId);
+        return ResponseEntity.ok(list);
     }
 
-    private void viewCurrentBalance() {
-
-        BigDecimal balance = transferServices.getBalance(currentUser);
-        if (balance != null) {
-            System.out.println("Your current balance is: $" + balance);
-        } else {
-            System.out.println("Your have $0");
-        }
-
+    // ---- transfers: detail ----
+    @GetMapping("/transfers/{id}")
+    public ResponseEntity<?> transferDetail(@RequestHeader(value = "Authorization", required = false) String authz,
+                                            @PathVariable int id) {
+        Integer userId = currentUserId(authz);
+        if (userId == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        Transfer t = transferDao.getTransferById(id);
+        return ResponseEntity.ok(t);
     }
 
-
-    private String findUsernameById(User[] users, int userId) {
-        for (User u : users) {
-            if (u.getId() == userId) {
-                return u.getUsername();
-            }
-        }
-        return "";
+    // ---- pending requests ----
+    @GetMapping("/transfers/pending")
+    public ResponseEntity<?> pending(@RequestHeader(value = "Authorization", required = false) String authz) {
+        Integer userId = currentUserId(authz);
+        if (userId == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        List<Transfer> list = transferDao.getPendingRequests(userId);
+        return ResponseEntity.ok(list);
     }
 
-    private void viewTransferHistory() {
-        Transfer[] transfers = transferServices.getTransferHistory(currentUser);
-        int currentUserId = currentUser.getUser().getId();
-
-
-        System.out.println("-----------------------------------");
-        System.out.println("Transfers");
-        System.out.println("ID            From/To        Amount");
-        System.out.println("-----------------------------------");
-
-
-        for (Transfer t : transfers) {
-            String from = "From: " + t.getFromUsername();
-            String to = "To: " + t.getToUsername();
-
-            String line = t.getTransferId() + "    " + from + " " + to +  "  " + " $ " + t.getTransferAmount();
-            System.out.println(line);
-        }
-
-        System.out.println("-----------------------------------");
-        int transferId = consoleService.promptForInt("Please enter transfer ID to view detail (0 to cancel): ");
-
-        if(transferId == 0) {
-            System.out.println("Cancelled.");
-            return;
-        }
-
-        Transfer transfer = transferServices.getTransferById(currentUser, transferId);
-
-        if (transfer == null) {
-            System.out.println("Transfer not found.");
-            return;
-        }
-
-        System.out.println("_________________________________________");
-        System.out.println("Transfer Details");
-        System.out.println("_________________________________________");
-        System.out.println("ID: " + transfer.getTransferId());
-        System.out.println("From: " + transfer.getFromUsername());
-        System.out.println("To: " + transfer.getToUsername());
-        System.out.println("TransferType: " + typeDescription(transfer.getTransferTypeId()));
-        System.out.println("TransferStatus: " + statusDescription(transfer.getTransferStatusId()));
-        System.out.println("Amount: $" + transfer.getTransferAmount());
-        System.out.println("_________________________________________");
-
+    // ---- approve / reject ----
+    @PostMapping("/transfers/{id}/approve")
+    public ResponseEntity<?> approve(@RequestHeader(value = "Authorization", required = false) String authz,
+                                     @PathVariable int id) {
+        Integer userId = currentUserId(authz);
+        if (userId == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        boolean ok = transferDao.updateTransferStatus(id, 2);
+        return ok ? ResponseEntity.ok(Map.of("status", "approved", "transferId", id))
+                : ResponseEntity.badRequest().body(Map.of("error", "update failed"));
     }
 
-    private void viewPendingRequests () {
-
-        Transfer[] pendingRequests = transferServices.getPendingRequests(currentUser);
-        //User[] users = transferServices.getAllUsers(currentUser);
-        System.out.println("PendingID       TransferTo          Amount");
-        System.out.println("------------------------------------------");
-
-        for (Transfer t : pendingRequests) {
-            System.out.println(t.getTransferId()
-                    + "             "
-                    + t.getToUsername()
-                    + "              "
-                    + "$" + t.getTransferAmount());
-        }
-
-        System.out.println("------------------------------------------");
-        int choice = consoleService.promptForInt("Please enter transfer ID to approve/reject,(0) to cancel");
-
-        if (choice == 0) {
-            System.out.println("Cancelled.");
-            return;
-        }
-
-        System.out.println("1:Approve");
-        System.out.println("2.Reject");
-
-        int action = consoleService.promptForInt("Choose action: ");
-
-        if (action == 1) {
-            transferServices.approveTransfer(currentUser, choice);
-            System.out.println("Transfer approve.");
-            viewCurrentBalance();
-
-        } else if (action == 2) {
-            transferServices.rejectTransfer(currentUser, choice);
-            System.out.println("Transfer rejected.");
-            viewCurrentBalance();
-
-        } else {
-            System.out.println("Invalid choice");
-        }
+    @PostMapping("/transfers/{id}/reject")
+    public ResponseEntity<?> reject(@RequestHeader(value = "Authorization", required = false) String authz,
+                                    @PathVariable int id) {
+        Integer userId = currentUserId(authz);
+        if (userId == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        boolean ok = transferDao.updateTransferStatus(id, 3);
+        return ok ? ResponseEntity.ok(Map.of("status", "rejected", "transferId", id))
+                : ResponseEntity.badRequest().body(Map.of("error", "update failed"));
     }
 
-
-    private void sendBucks () {
-        User[] users = transferServices.getAllUsers(currentUser);
-        System.out.println("-----------------------------------");
-        System.out.println("Users");
-        System.out.println("ID                             Name");
-        System.out.println("-----------------------------------");
-
-        for (User u :users){
-            if (u.getId() != currentUser.getUser().getId()){
-                System.out.println(u.getId() + "                           " + u.getUsername());
-            }
+    // ---- send / request ----
+    @PostMapping("/send")
+    public ResponseEntity<?> send(@RequestHeader(value = "Authorization", required = false) String authz,
+                                  @RequestBody SendOrRequestDto body) {
+        Integer fromUserId = currentUserId(authz);
+        if (fromUserId == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        if (body.getToUserId() == null || !StringUtils.hasText(body.getAmount()))
+            return ResponseEntity.badRequest().body(Map.of("error", "toUserId and amount are required"));
+        BigDecimal amt;
+        try { amt = new BigDecimal(body.getAmount()); } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid amount"));
         }
-
-        System.out.println("-----------------------------------");
-
-        int toUserId = consoleService.promptForInt("Enter ID of user you want to sending TEBucks (0 to cancel)");
-        if(toUserId == 0){
-            System.out.println("Cancelled.");
-            return;
-        }
-
-        BigDecimal amount = consoleService.promptForBigDecimal("Please Enter the amount you want to send: ");
-
-        SendTransferRequest request = new SendTransferRequest();
-        request.setToUserId(toUserId);
-        request.setAmount(amount);
-
-        String result = transferServices.sendBucks(currentUser,request);
-        System.out.println(result);
-
+        boolean ok = transferDao.createSendTransfer(fromUserId, body.getToUserId(), amt);
+        return ok ? ResponseEntity.ok(Map.of("status", "ok", "amount", amt))
+                : ResponseEntity.badRequest().body(Map.of("error", "transfer failed"));
     }
 
-    private void requestBucks () {
-        User[] users = transferServices.getAllUsers(currentUser);
-        System.out.println("-----------------------------------");
-        System.out.println("Users");
-        System.out.println("ID                             Name");
-        System.out.println("-----------------------------------");
-
-        for (User u :users){
-            if (u.getId() != currentUser.getUser().getId()){
-                System.out.println(u.getId() + "                           " + u.getUsername());
-            }
+    @PostMapping("/request")
+    public ResponseEntity<?> request(@RequestHeader(value = "Authorization", required = false) String authz,
+                                     @RequestBody SendOrRequestDto body) {
+        Integer fromUserId = currentUserId(authz);
+        if (fromUserId == null) return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
+        if (body.getToUserId() == null || !StringUtils.hasText(body.getAmount()))
+            return ResponseEntity.badRequest().body(Map.of("error", "toUserId and amount are required"));
+        BigDecimal amt;
+        try { amt = new BigDecimal(body.getAmount()); } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid amount"));
         }
+        boolean ok = transferDao.createRequestTransfer(fromUserId, body.getToUserId(), amt);
+        return ok ? ResponseEntity.ok(Map.of("status", "ok", "amount", amt))
+                : ResponseEntity.badRequest().body(Map.of("error", "request failed"));
+    }
 
-        System.out.println("-----------------------------------");
-
-        int toUserId = consoleService.promptForInt("Enter ID of user you want to requesting TEBucks (0 to cancel)");
-        if(toUserId == 0){
-            System.out.println("Cancelled.");
-            return;
-        }
-
-        BigDecimal amount = consoleService.promptForBigDecimal("Please Enter the amount you want to request: ");
-
-        SendTransferRequest request = new SendTransferRequest();
-        request.setToUserId(toUserId);
-        request.setAmount(amount);
-
-        String result = transferServices.requestBucks(currentUser,request);
-        System.out.println(result);
-
+    /** DTO used by /send and /request */
+    public static class SendOrRequestDto {
+        private Integer toUserId;
+        private String amount;
+        public SendOrRequestDto() {}
+        public Integer getToUserId() { return toUserId; }
+        public void setToUserId(Integer toUserId) { this.toUserId = toUserId; }
+        public String getAmount() { return amount; }
+        public void setAmount(String amount) { this.amount = amount; }
     }
 }
