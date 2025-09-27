@@ -9,317 +9,312 @@
         html,body { height:100%; }
         body { margin:0; background:#0b0f14; color:#e5e7eb; font:14px/1.6 ui-monospace,Menlo,Consolas,monospace; }
         .wrap { max-width: 900px; margin: 24px auto; padding: 16px; }
-        #term { white-space: pre-wrap; background:#0e131a; border:1px solid #1f2937; border-radius:12px; padding:18px; min-height:60vh; }
-        #prompt { display:flex; gap:8px; align-items:center; margin-top:12px; }
-        #ps { color:#60a5fa; }
-        #cmd { flex:1; background:#0e131a; color:#e5e7eb; border:1px solid #334155; border-radius:10px; padding:10px 12px; outline:none; }
-        #cmd::placeholder { color:#64748b; }
+        #term{
+          white-space: pre-wrap;
+          background:#0e131a; border:1px solid #1f2937; border-radius:12px;
+          padding:18px; min-height:70vh; max-height:80vh; overflow:auto;
+        }
         .hint { color:#94a3b8; margin-top:8px; }
         a { color:#93c5fd; text-decoration:none; } a:hover{ text-decoration:underline; }
+
+        /* Prompt line that mimics a terminal */
+        #cursorline { display:block; }
+        #psline { color:#60a5fa; }
+        #typed { white-space:pre-wrap; }
+        .caret {
+          display:inline-block; width:8px; height:1.1em; background:#e5e7eb;
+          vertical-align:-2px; margin-left:1px; animation:blink 1s step-end infinite;
+        }
+        @keyframes blink { 50% { background: transparent; } }
+
+        /* Hidden input to capture keystrokes */
+        #hid { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
     </style>
 </head>
 <body>
 <div class="wrap">
-    <div id="term"></div>
-    <div id="prompt">
-        <span id="ps">$</span>
-        <input id="cmd" placeholder="type here and press Enter…" autofocus />
+    <div id="term">
+        <!-- All output lines insert before this cursor line -->
+        <div id="cursorline"><span id="psline">$</span> <span id="typed"></span><span class="caret"></span></div>
     </div>
-    <div class="hint">Health: <a href="/demo/health" target="_blank">/demo/health</a> · GUI page: <a href="/demo.html" target="_blank">/demo.html</a></div>
 </div>
+<input id="hid" autocomplete="off" spellcheck="false"/>
 
 <script>
-    /* Menu-driven Web Console that mirrors your Java CLI app flow. */
-
+    /* ---------------- basic DOM helpers ---------------- */
     const term = document.getElementById('term');
-    const input = document.getElementById('cmd');
-    const PS = document.getElementById('ps');
+    const cursorline = document.getElementById('cursorline');
+    const psline = document.getElementById('psline');
+    const typedSpan = document.getElementById('typed');
+    const hid = document.getElementById('hid');
 
+    function scrollBottom(){ requestAnimationFrame(()=> { term.scrollTop = term.scrollHeight; }); }
+    function appendLine(text=''){ const d=document.createElement('div'); d.textContent=text; term.insertBefore(d, cursorline); scrollBottom(); }
+    function appendRaw(html){ const d=document.createElement('div'); d.innerHTML=html; term.insertBefore(d, cursorline); scrollBottom(); }
+    function clearTerm(){ [...term.children].forEach(el=>{ if(el!==cursorline) el.remove(); }); scrollBottom(); }
+
+    /* ---------------- session & state ------------------ */
     const S = {
       token: localStorage.getItem('TENMO_TOKEN') || null,
-      user: localStorage.getItem('TENMO_USER') || null,
-      userId: null, // we fetch when needed
-      step: null,   // which prompt handler is active
-      tmp: {}       // temp values across steps
+      user:  localStorage.getItem('TENMO_USER')  || null,
+      step: null,                // current prompt handler
+      hist: [],                  // simple history buffer
+      histIdx: -1
     };
-
-    function println(s=''){ term.textContent += s + '\n'; term.scrollTop = term.scrollHeight; }
-    function clear(){ term.textContent=''; }
     function setSession(token, username){
-      S.token = token || null;
-      S.user = username || null;
+      S.token = token || null; S.user = username || null;
       if(token){ localStorage.setItem('TENMO_TOKEN', token); localStorage.setItem('TENMO_USER', username||''); }
       else { localStorage.removeItem('TENMO_TOKEN'); localStorage.removeItem('TENMO_USER'); }
-      PS.textContent = S.user ? `${S.user}@tenmo$` : '$';
+      updatePromptPS();
     }
-    PS.textContent = S.user ? `${S.user}@tenmo$` : '$';
+    function updatePromptPS(){ psline.textContent = (S.user ? `${S.user}@tenmo$` : '$'); }
 
+    /* ---------------- input focus & echo --------------- */
+    function focusInput(){ hid.focus(); }
+    term.addEventListener('click', focusInput);
+    window.addEventListener('load', focusInput);
+
+    hid.addEventListener('input', ()=>{ typedSpan.textContent = hid.value; scrollBottom(); });
+
+    /* history: up/down to recall previous input */
+    hid.addEventListener('keydown', (e)=>{
+      if(e.key === 'ArrowUp'){
+        if(S.hist.length){
+          if(S.histIdx === -1) S.histIdx = S.hist.length - 1;
+          else if(S.histIdx > 0) S.histIdx--;
+          hid.value = S.hist[S.histIdx]; typedSpan.textContent = hid.value;
+        }
+        e.preventDefault();
+      } else if(e.key === 'ArrowDown'){
+        if(S.hist.length && S.histIdx !== -1){
+          if(S.histIdx < S.hist.length - 1) S.histIdx++;
+          else { S.histIdx = -1; hid.value=''; typedSpan.textContent=''; return; }
+          hid.value = S.hist[S.histIdx]; typedSpan.textContent = hid.value;
+        }
+        e.preventDefault();
+      }
+    });
+
+    /* on Enter: echo line, push to history, dispatch */
+    hid.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        const val = hid.value;
+        // echo like a shell
+        appendLine(`${psline.textContent} ${val}`);
+        if(val.trim()) { S.hist.push(val); if(S.hist.length>100) S.hist.shift(); }
+        S.histIdx = -1;
+        typedSpan.textContent = ''; hid.value='';
+        if(typeof S.step === 'function'){ const fn = S.step; S.step=null; fn(val); }
+        scrollBottom();
+      } else if(e.key==='l' && e.ctrlKey){ // Ctrl+L clear screen
+        e.preventDefault(); clearTerm();
+      }
+    });
+
+    /* ---------------- API wrapper ---------------------- */
     async function api(path, method='GET', body){
       const headers = { 'Content-Type':'application/json' };
       if(S.token) headers.Authorization = `Bearer ${S.token}`;
       const res = await fetch(path, { method, headers, body: body?JSON.stringify(body):undefined });
-      const txt = await res.text();
-      let data = null; try{ data = txt?JSON.parse(txt):null; }catch{ data = txt; }
+      const txt = await res.text(); let data=null; try{ data = txt?JSON.parse(txt):null; }catch{ data=txt; }
       return { ok: res.ok, status: res.status, body: data };
     }
 
-    /* ---------- Menus & Flows (mirror your ConsoleService) ---------- */
-
+    /* ---------------- UI flows (menus) ----------------- */
     function printGreeting(){
-      println("******************************");
-      println("* Welcome to TEnmo!          *");
-      println("******************************");
+      appendLine("******************************");
+      appendLine("* Welcome to TEnmo!          *");
+      appendLine("******************************");
     }
-
     function printLoginMenu(){
-      println("\n1: Register");
-      println("2: Login");
-      println("0: Exit");
+      appendRaw("<br/>1: Register<br/>2: Login<br/>0: Exit");
     }
-
     function printMainMenu(){
-      println("\n-----------------------------------");
-      println("Main Menu");
-      println("-----------------------------------");
-      println("1: View your current balance");
-      println("2: View your past transfers");
-      println("3: View your pending requests");
-      println("4: Send TE bucks");
-      println("5: Request TE bucks");
-      println("0: Exit");
+      appendRaw("<br/>-----------------------------------<br/>Main Menu<br/>-----------------------------------");
+      appendRaw("<br/>1: View your current balance<br/>2: View your past transfers<br/>3: View your pending requests<br/>4: Send TE bucks<br/>5: Request TE bucks<br/>0: Exit");
     }
 
+    /* prompt helpers */
+    function prompt(msg, handler){ appendLine(msg); S.step = (v)=> handler(String(v||'').trim()); }
+    function promptInt(msg, handler){
+      prompt(msg, v=>{ const n=Number(v); if(Number.isNaN(n)){ appendLine("Invalid number"); promptInt(msg, handler); } else handler(n); });
+    }
+    function pauseThen(next){ appendLine(""); appendLine("Press Enter to continue..."); S.step = ()=> next(); }
+
+    /* exit behavior improvements */
+    function exitApp(){
+      appendLine("Exited. Press Enter to restart...");
+      S.step = ()=> startApp();
+    }
+
+    /* boot */
     function startApp(){
-      clear(); printGreeting();
+      clearTerm(); printGreeting(); updatePromptPS();
       if(!S.token){ loginMenu(); }
-      else { println(`(session restored for ${S.user})`); mainMenu(); }
+      else { appendLine(`(session restored for ${S.user})`); mainMenu(); }
     }
 
-    function loginMenu(){
-      printLoginMenu();
-      prompt("Please choose an option: ", handleLoginMenu);
+    /* login menu */
+    function loginMenu(){ printLoginMenu(); prompt("Please choose an option: ", handleLoginMenu); }
+    function handleLoginMenu(sel){
+      const n = Number(sel);
+      if(n===1) doRegister();
+      else if(n===2) doLogin();
+      else if(n===0) exitApp();              // ← 不再卡死，可回车重启
+      else { appendLine("Invalid Selection"); loginMenu(); }
     }
 
-    function handleLoginMenu(val){
-      const n = Number(val);
-      if(n === 1) { doRegister(); }
-      else if(n === 2) { doLogin(); }
-      else if(n === 0) { println("Bye."); }
-      else { println("Invalid Selection"); loginMenu(); }
-    }
-
+    /* register / login */
     function doRegister(){
-      println("Please register a new user account");
-      S.tmp = {};
-      promptUsername(async (u)=>{
-        S.tmp.username = u;
+      appendLine("Please register a new user account");
+      prompt("Enter username: ", (u)=>{
         prompt("Enter password: ", async (p)=>{
           const {ok,status,body} = await api('/demo/register','POST',{username:u,password:p});
-          if(ok){ println("Registration successful. You can now login."); }
-          else { println(`Registration failed (${status}): ${JSON.stringify(body)}`); }
+          appendLine(ok ? "Registration successful. You can now login." : `Registration failed (${status}): ${JSON.stringify(body)}`);
           loginMenu();
         });
       });
     }
-
     function doLogin(){
-      S.tmp = {};
-      promptUsername(async (u)=>{
-        S.tmp.username = u;
+      prompt("Enter username: ", (u)=>{
         prompt("Enter password: ", async (p)=>{
           const {ok,status,body} = await api('/demo/login','POST',{username:u,password:p});
-          if(!ok){ println("Login failed."); loginMenu(); return; }
+          if(!ok){ appendLine("Login failed."); loginMenu(); return; }
           const token = body?.token || body?.id_token || body?.jwt;
-          if(!token){ println("Server did not return token."); loginMenu(); return; }
-          setSession(token, u);
-          println("Login successful.");
-          mainMenu();
+          if(!token){ appendLine("Server did not return token."); loginMenu(); return; }
+          setSession(token, u); appendLine("Login successful."); mainMenu();
         });
       });
     }
 
-    function mainMenu(){
-      printMainMenu();
-      prompt("Please choose an option: ", handleMainMenu);
-    }
-
-    function handleMainMenu(val){
-      const n = Number(val);
+    /* main menu */
+    function mainMenu(){ printMainMenu(); prompt("Please choose an option: ", handleMainMenu); }
+    function handleMainMenu(sel){
+      const n = Number(sel);
       if(n===1) viewCurrentBalance();
       else if(n===2) viewTransferHistory();
       else if(n===3) viewPendingRequests();
       else if(n===4) sendBucks();
       else if(n===5) requestBucks();
-      else if(n===0){ println("Bye."); }
-      else { println("Invalid Selection"); mainMenu(); }
+      else if(n===0){                        // ← 主菜单的 Exit 当作登出并回到登录
+        setSession(null,null);
+        appendLine("Logged out. Back to login menu.");
+        loginMenu();
+      } else { appendLine("Invalid Selection"); mainMenu(); }
     }
 
-    /* ---- 1) Balance ---- */
+    /* 1) balance */
     async function viewCurrentBalance(){
       const {ok,status,body} = await api('/demo/balance');
-      if(ok){ println(`Your current balance is: $${body.balance}`); }
-      else { println(`Error (${status}): ${JSON.stringify(body)}`); }
+      appendLine(ok ? `Your current balance is: $${body.balance}` : `Error (${status}): ${JSON.stringify(body)}`);
       pauseThen(mainMenu);
     }
 
-    /* ---- 2) Transfers history ---- */
+    /* 2) transfers list + detail */
     async function viewTransferHistory(){
       const {ok,status,body} = await api('/demo/transfers');
-      if(!ok){ println(`Error (${status}): ${JSON.stringify(body)}`); return pauseThen(mainMenu); }
+      if(!ok){ appendLine(`Error (${status}): ${JSON.stringify(body)}`); return pauseThen(mainMenu); }
 
-      println("-----------------------------------");
-      println("Transfers");
-      println("ID            From/To        Amount");
-      println("-----------------------------------");
+      appendLine("-----------------------------------");
+      appendLine("Transfers");
+      appendLine("ID            From/To        Amount");
+      appendLine("-----------------------------------");
       (body||[]).forEach(t=>{
         const line = `${String(t.transferId).padEnd(12)} ${("From: "+t.fromUsername).padEnd(15)} ${("To: "+t.toUsername).padEnd(15)}  $ ${t.transferAmount}`;
-        println(line);
+        appendLine(line);
       });
-      println("-----------------------------------");
+      appendLine("-----------------------------------");
       promptInt("Please enter transfer ID to view detail (0 to cancel): ", async (id)=>{
-        if(id===0){ println("Cancelled."); return pauseThen(mainMenu); }
+        if(id===0){ appendLine("Cancelled."); return pauseThen(mainMenu); }
         const {ok:ok2,status:s2,body:b2} = await api(`/demo/transfers/${id}`);
-        if(!ok2){ println(`Transfer not found. (${s2})`); return pauseThen(mainMenu); }
-        println("_________________________________________");
-        println("Transfer Details");
-        println("_________________________________________");
-        println(`ID: ${b2.transferId}`);
-        println(`From: ${b2.fromUsername}`);
-        println(`To: ${b2.toUsername}`);
-        println(`TransferType: ${b2.transferTypeId}`);
-        println(`TransferStatus: ${b2.transferStatusId}`);
-        println(`Amount: $${b2.transferAmount}`);
-        println("_________________________________________");
+        if(!ok2){ appendLine(`Transfer not found. (${s2})`); return pauseThen(mainMenu); }
+        appendLine("_________________________________________");
+        appendLine("Transfer Details");
+        appendLine("_________________________________________");
+        appendLine(`ID: ${b2.transferId}`);
+        appendLine(`From: ${b2.fromUsername}`);
+        appendLine(`To: ${b2.toUsername}`);
+        appendLine(`TransferType: ${b2.transferTypeId}`);
+        appendLine(`TransferStatus: ${b2.transferStatusId}`);
+        appendLine(`Amount: $${b2.transferAmount}`);
+        appendLine("_________________________________________");
         pauseThen(mainMenu);
       });
     }
 
-    /* ---- 3) Pending requests ---- */
+    /* 3) pending */
     async function viewPendingRequests(){
       const {ok,status,body} = await api('/demo/transfers/pending');
-      println("PendingID       TransferTo          Amount");
-      println("------------------------------------------");
-      if(ok && Array.isArray(body)){
-        body.forEach(t=>{
-          println(`${String(t.transferId).padEnd(15)} ${String(t.toUsername).padEnd(18)} $${t.transferAmount}`);
-        });
-      } else {
-        println(`Error (${status}): ${JSON.stringify(body)}`);
-      }
-      println("------------------------------------------");
+      appendLine("PendingID       TransferTo          Amount");
+      appendLine("------------------------------------------");
+      if(ok){ (body||[]).forEach(t=> appendLine(`${String(t.transferId).padEnd(15)} ${String(t.toUsername).padEnd(18)} $${t.transferAmount}`)); }
+      else { appendLine(`Error (${status}): ${JSON.stringify(body)}`); }
+      appendLine("------------------------------------------");
       promptInt("Please enter transfer ID to approve/reject,(0) to cancel: ", (choice)=>{
-        if(choice===0){ println("Cancelled."); return pauseThen(mainMenu); }
-        println("1:Approve"); println("2:Reject");
+        if(choice===0){ appendLine("Cancelled."); return pauseThen(mainMenu); }
+        appendLine("1:Approve"); appendLine("2:Reject");
         promptInt("Choose action: ", async (act)=>{
           if(act===1){
             const {ok:ok2,status:s2} = await api(`/demo/transfers/${choice}/approve`,'POST');
-            println(ok2?"Transfer approved.":"Approve failed ("+s2+")");
+            appendLine(ok2?"Transfer approved.":`Approve failed (${s2})`);
             return viewCurrentBalanceThenMenu();
           } else if(act===2){
             const {ok:ok3,status:s3} = await api(`/demo/transfers/${choice}/reject`,'POST');
-            println(ok3?"Transfer rejected.":"Reject failed ("+s3+")");
+            appendLine(ok3?"Transfer rejected.":`Reject failed (${s3})`);
             return viewCurrentBalanceThenMenu();
-          } else {
-            println("Invalid choice");
-            pauseThen(mainMenu);
-          }
+          } else { appendLine("Invalid choice"); pauseThen(mainMenu); }
         });
       });
     }
-
     async function viewCurrentBalanceThenMenu(){
       const {ok,body} = await api('/demo/balance');
-      if(ok) println(`Your current balance is: $${body.balance}`);
+      if(ok) appendLine(`Your current balance is: $${body.balance}`);
       pauseThen(mainMenu);
     }
 
-    /* ---- 4) Send bucks ---- */
+    /* 4) send */
     async function sendBucks(){
-      // list users (excluding self)
       const {ok,status,body} = await api('/demo/users');
-      println("-----------------------------------");
-      println("Users");
-      println("ID                             Name");
-      println("-----------------------------------");
-      if(ok){
-        (body||[]).forEach(u=>{
-          println(`${String(u.id).padEnd(30)} ${u.username}`);
-        });
-      } else {
-        println(`Error (${status}) while loading users`);
-      }
-      println("-----------------------------------");
+      appendLine("-----------------------------------");
+      appendLine("Users");
+      appendLine("ID                             Name");
+      appendLine("-----------------------------------");
+      if(ok){ (body||[]).forEach(u=> appendLine(`${String(u.id).padEnd(30)} ${u.username}`)); }
+      else { appendLine(`Error (${status}) while loading users`); }
+      appendLine("-----------------------------------");
       promptInt("Enter ID of user you want to sending TEBucks (0 to cancel): ", (toId)=>{
-        if(toId===0){ println("Cancelled."); return pauseThen(mainMenu); }
+        if(toId===0){ appendLine("Cancelled."); return pauseThen(mainMenu); }
         prompt("Please Enter the amount you want to send: ", async (amtText)=>{
           const {ok:ok2,status:s2,body:b2} = await api('/demo/send','POST',{ toUserId: toId, amount: amtText });
-          println(ok2 ? "Send success." : `Send failed (${s2}): ${JSON.stringify(b2)}`);
+          appendLine(ok2 ? "Send success." : `Send failed (${s2}): ${JSON.stringify(b2)}`);
           viewCurrentBalanceThenMenu();
         });
       });
     }
 
-    /* ---- 5) Request bucks ---- */
+    /* 5) request */
     async function requestBucks(){
       const {ok,status,body} = await api('/demo/users');
-      println("-----------------------------------");
-      println("Users");
-      println("ID                             Name");
-      println("-----------------------------------");
-      if(ok){
-        (body||[]).forEach(u=>{
-          println(`${String(u.id).padEnd(30)} ${u.username}`);
-        });
-      } else {
-        println(`Error (${status}) while loading users`);
-      }
-      println("-----------------------------------");
+      appendLine("-----------------------------------");
+      appendLine("Users");
+      appendLine("ID                             Name");
+      appendLine("-----------------------------------");
+      if(ok){ (body||[]).forEach(u=> appendLine(`${String(u.id).padEnd(30)} ${u.username}`)); }
+      else { appendLine(`Error (${status}) while loading users`); }
+      appendLine("-----------------------------------");
       promptInt("Enter ID of user you want to requesting TEBucks (0 to cancel): ", (toId)=>{
-        if(toId===0){ println("Cancelled."); return pauseThen(mainMenu); }
+        if(toId===0){ appendLine("Cancelled."); return pauseThen(mainMenu); }
         prompt("Please Enter the amount you want to request: ", async (amtText)=>{
           const {ok:ok2,status:s2,body:b2} = await api('/demo/request','POST',{ toUserId: toId, amount: amtText });
-          println(ok2 ? "Request submitted." : `Request failed (${s2}): ${JSON.stringify(b2)}`);
+          appendLine(ok2 ? "Request submitted." : `Request failed (${s2}): ${JSON.stringify(b2)}`);
           viewCurrentBalanceThenMenu();
         });
       });
     }
 
-    /* ---------- tiny prompt helpers ---------- */
-    function prompt(msg, handler){
-      println(msg);
-      S.step = (val)=>{
-        handler(String(val||'').trim());
-      };
-    }
-    function promptInt(msg, handler){
-      prompt(msg, (v)=>{
-        const n = Number(v);
-        if(Number.isNaN(n)) { println("Invalid number"); promptInt(msg, handler); }
-        else handler(n);
-      });
-    }
-    function pauseThen(next){
-      println(""); println("Press Enter to continue...");
-      S.step = ()=> next();
-    }
-
-    /* input dispatch */
-    input.addEventListener('keydown', (e)=>{
-      if(e.key === 'Enter'){
-        const v = input.value; input.value='';
-        if(typeof S.step === 'function'){ const fn = S.step; S.step=null; fn(v); }
-      }
-    });
-
-    /* username helper */
-    function promptUsername(cb){
-      prompt("Enter username: ", (u)=>{
-        if(!u){ println("Username required."); return promptUsername(cb); }
-        cb(u);
-      });
-    }
-
-    /* boot */
+    /* kick off */
+    updatePromptPS();
     startApp();
 </script>
 </body>
