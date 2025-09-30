@@ -161,7 +161,7 @@
       const n = Number(sel);
       if(n===1) doRegister();
       else if(n===2) doLogin();
-      else if(n===0) exitApp();              // ← 不再卡死，可回车重启
+      else if(n===0) exitApp();
       else { appendLine("Invalid Selection"); loginMenu(); }
     }
 
@@ -197,7 +197,7 @@
       else if(n===3) viewPendingRequests();
       else if(n===4) sendBucks();
       else if(n===5) requestBucks();
-      else if(n===0){                        // ← 主菜单的 Exit 当作登出并回到登录
+      else if(n===0){
         setSession(null,null);
         appendLine("Logged out. Back to login menu.");
         loginMenu();
